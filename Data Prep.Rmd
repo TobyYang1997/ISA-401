@@ -1,0 +1,155 @@
+---
+title: "Data Preparation"
+author: "Toby Yang"
+date: "4/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### loading packages
+
+```{r}
+library(lubridate)
+library(data.table)
+library(lubridate)
+library(maps)
+library(tidyverse)
+```
+
+## reading flight csv files
+
+```{r}
+# create file list
+flight_2018 <- paste("2018", "_", 01:12, ".csv", sep = "")
+flight_2019 <- paste("2019", "_", 01:12, ".csv", sep = "")
+fligt_csv <- as.list(c(flight_2018, flight_2019))
+
+flight_csv_list <- lapply(fligt_csv, fread)
+
+flightdata <- rbindlist(flight_csv_list) # combine all DFs
+`%notin%` <- Negate(`%in%`) # set up %notin%
+```
+
+### manipulating orignal dataset 
+
+```{r}
+flightdata <- select(flightdata, -ORIGIN_AIRPORT_ID, -ORIGIN_AIRPORT_SEQ_ID, -ORIGIN_CITY_MARKET_ID, 
+                     -ORIGIN_STATE_ABR, -ORIGIN_STATE_FIPS, -DEST_AIRPORT_ID, -DEST_AIRPORT_SEQ_ID, 
+                     -DEST_CITY_MARKET_ID, -DEST_STATE_ABR, -DEST_STATE_FIPS, -DEST_STATE_NM, -V17)
+
+flightdata <- rename(flightdata, State = ORIGIN_STATE_NM) # rename column
+
+flightdata$CANCELLATION_CODE <- sub("^$", "N", flightdata$CANCELLATION_CODE) # impute CANCELLATION_CODE
+
+flightdata$FL_DATE <- as.Date(flightdata$FL_DATE) # convert column to date
+
+flightdata$Month <- format(flightdata$FL_DATE,"%B") # extract month
+
+flightdata$Year <- year(as.POSIXlt(flightdata$FL_DATE, format="%y/%m/%d")) # extract year
+
+flightdata$State <- tolower(flightdata$State) # convert to lower case
+
+flightdata <- select(flightdata, -FL_DATE)
+
+flightdata <- flightdata[, c(6, 5, 1, 2, 3, 4)] # reorder columns
+
+```
+
+### build flight cancellation df 
+
+```{r}
+flight_cancl <- flightdata[, c(1,2,3,4,5)] %>% 
+  filter(State %notin% c("u.s. pacific trust territories and possessions", "u.s. virgin islands",
+                                   "puerto rico")) %>%
+  group_by(Year, Month, State, CANCELLED, CANCELLATION_CODE) %>%
+  summarize(Freq = n())
+```
+
+### build flight delay df 
+
+```{r}
+flight_delay <- flightdata[, c(1,2,3,6)] %>% 
+  filter(WEATHER_DELAY != 0) %>% 
+  filter(State %notin% c("u.s. pacific trust territories and possessions", "u.s. virgin islands",
+                                   "puerto rico")) %>% 
+  group_by(Year, Month, State) %>% 
+  summarize(Avg_delay = mean(WEATHER_DELAY, na.rm = TRUE))
+```
+
+
+### save flight data
+
+```{r}
+save(flight_delay, flight_cancl, file = "flight_data.RData")
+```
+
+
+## reading weather csv files
+
+```{r}
+storm.2018 <- fread("StormEvents_details_2018.csv")
+storm.2019 <- fread("StormEvents_details_2019.csv")
+storm <- rbind(storm.2018, storm.2019)
+```
+
+### attach geographic info
+
+```{r}
+us <- map_data("state") %>%
+  select(long, lat, group, order, region)
+
+state <- data.frame(state.name, state.area)
+state <- state %>%
+  mutate(state.name = tolower(state.name)) %>%
+  rename(region = "state.name",
+         area = "state.area") %>%
+  select(region, area)
+
+us <- left_join(us, state) 
+```
+
+
+### rename columns
+
+```{r}
+storm <- storm %>%
+  select(YEAR, MONTH_NAME, EVENT_TYPE, STATE, CZ_NAME) %>%
+  rename(Year = YEAR,
+         Month = MONTH_NAME,
+         Event = EVENT_TYPE,
+         State = STATE) %>%
+  mutate(State = tolower(State))
+```
+
+### calculate freq
+
+```{r}
+storm <- storm %>% 
+  group_by(Year, Month, Event, State) %>%
+  summarize(Freq = n())
+```
+
+### find the top events
+
+```{r}
+storm.top <- storm %>%
+  group_by(Event) %>%
+  summarize(Freq = n()) %>%
+  arrange(desc(Freq)) %>%
+  head(5)
+
+storm.select <- storm %>%
+  filter(Event %in% c("Thunderstorm Wind", "Hail", "Flash Flood", "Winter Weather", "Flood"))
+```
+
+
+### Save the Dataset as RData
+
+```{r}
+save(us, storm.select,
+     file = "USweather.RData")
+```
+
